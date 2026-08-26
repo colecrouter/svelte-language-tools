@@ -108,6 +108,22 @@ import { CallHierarchyProviderImpl } from './features/CallHierarchyProvider';
 import { CodeLensProviderImpl } from './features/CodeLensProvider';
 import { WorkspaceSymbolsProviderImpl } from './features/WorkspaceSymbolProvider';
 
+function getImportSpans(sourceFile: ts.SourceFile) {
+    const spans: Array<{ start: number; end: number }> = [];
+    collectImportSpans(sourceFile);
+    return spans;
+
+    function collectImportSpans(node: ts.Node) {
+        if (ts.isImportDeclaration(node) || ts.isImportEqualsDeclaration(node)) {
+            spans.push({ start: node.getStart(sourceFile), end: node.getEnd() });
+            return;
+        }
+
+        // svelte2tsx can place instance-script declarations inside generated render code, so inspect nested nodes too.
+        node.forEachChild(collectImportSpans);
+    }
+}
+
 export class TypeScriptPlugin
     implements
         DiagnosticsProvider,
@@ -279,9 +295,12 @@ export class TypeScriptPlugin
         }
 
         const navTree = lang.getNavigationTree(tsDoc.filePath);
+        const sourceFile = lang.getProgram()?.getSourceFile(tsDoc.filePath);
+        // Keep the fallback so document symbols continue to work if source is unavailable.
+        const importSpans = sourceFile ? getImportSpans(sourceFile) : [];
 
         const symbols: SymbolInformation[] = [];
-        collectSymbols(navTree, undefined, (symbol) => symbols.push(symbol));
+        collectSymbols(navTree, undefined);
 
         const topContainerName = symbols[0].name;
         const result: SymbolInformation[] = [];
@@ -346,15 +365,11 @@ export class TypeScriptPlugin
 
         return result;
 
-        function collectSymbols(
-            tree: NavigationTree,
-            container: string | undefined,
-            cb: (symbol: SymbolInformation) => void
-        ) {
+        function collectSymbols(tree: NavigationTree, container: string | undefined) {
             const start = tree.spans[0];
             const end = tree.spans[tree.spans.length - 1];
-            if (start && end) {
-                cb(
+            if (start && end && !isImportSymbol(start)) {
+                symbols.push(
                     SymbolInformation.create(
                         tree.text,
                         symbolKindFromString(tree.kind),
@@ -369,9 +384,18 @@ export class TypeScriptPlugin
             }
             if (tree.childItems) {
                 for (const child of tree.childItems) {
-                    collectSymbols(child, tree.text, cb);
+                    collectSymbols(child, tree.text);
                 }
             }
+        }
+
+        function isImportSymbol(span: { start: number; length: number }) {
+            // Navigation tree entries for imported bindings cover only their name, so check
+            // whether that smaller span is contained by an import declaration.
+            return importSpans.some(
+                (importSpan) =>
+                    importSpan.start <= span.start && importSpan.end >= span.start + span.length
+            );
         }
     }
 
