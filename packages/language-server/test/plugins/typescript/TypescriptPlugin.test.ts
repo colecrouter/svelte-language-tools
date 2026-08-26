@@ -825,6 +825,25 @@ describe('TypescriptPlugin', function () {
         return;
     }
 
+    it('filters generated snippet functions without hiding source-authored template symbols', async () => {
+        const { plugin, document } = setup('documentsymbols-snippets.v5/input.svelte');
+
+        const symbols = await plugin.getDocumentSymbols(document);
+        const names = symbols.map((symbol) => symbol.name).sort();
+
+        assert.ok(names.includes('items.map() callback'));
+        assert.deepStrictEqual(names, [
+            'children',
+            'children',
+            'data',
+            'getter',
+            'item',
+            'items',
+            'items.map() callback',
+            'value'
+        ]);
+    });
+
     it('provides definitions from svelte to rune-mode svelte doc', async () => {
         const { plugin, document } = setup('definition/definition-rune.svelte');
 
